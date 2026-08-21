@@ -1,0 +1,141 @@
+// =============================================================================
+// Examint — Prisma Schema
+// Database: SQLite (zero-install, single .db file on disk)
+// ORM: Prisma 5.x
+// =============================================================================
+// To apply this schema:
+//   npx prisma migrate dev --name init
+// To regenerate the Prisma client after schema changes:
+//   npx prisma generate
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// User
+// Represents a registered teacher account.
+// - passwordHash: bcrypt-hashed password; the plain-text password is never stored.
+// - geminiApiKey: AES-256-GCM encrypted using NEXTAUTH_SECRET before storage.
+//   Each teacher supplies their own Google AI Studio key so that no shared quota
+//   is consumed — one teacher's heavy usage cannot affect another's.
+// =============================================================================
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  geminiApiKey String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  contentItems ContentItem[]
+  papers       QuestionPaper[]
+}
+
+// =============================================================================
+// ContentItem
+// A single extracted piece of content saved to the teacher's Content Bank.
+// - type: one of paragraph | question | photo | diagram | heading | other
+// - textContent: the AI-extracted or teacher-edited text for the block.
+// - imageUrl: path to the cropped/resized image file inside uploads/<userId>/.
+//   Only populated for photo and diagram types.
+// - sourceImageUrl: path to the original uploaded photo from which this item
+//   was extracted. Stored for reference; not shown in the paper.
+// =============================================================================
+model ContentItem {
+  id             String   @id @default(cuid())
+  userId         String
+  type           String   @default("other")
+  textContent    String?
+  imageUrl       String?
+  sourceImageUrl String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paperQuestions PaperQuestion[]
+}
+
+// =============================================================================
+// QuestionPaper
+// A complete question paper created by a teacher.
+// - numberingFormat: controls how questions are numbered in the DOCX output.
+//   Options: "1." | "Q1." | "(i)" | "a)"
+// - headerConfig: JSON-serialized object stored as a SQLite TEXT field.
+//   Shape: { schoolName, subject, class, date, logoUrl, instructions }
+// - footerConfig: JSON-serialized object stored as a SQLite TEXT field.
+//   Shape: { showPageNumbers, signatureLine, customText }
+// Note: Prisma does not natively support JSON in SQLite; we store it as String
+// and parse/stringify in application code (lib/types.ts).
+// =============================================================================
+model QuestionPaper {
+  id              String   @id @default(cuid())
+  userId          String
+  title           String
+  numberingFormat String   @default("1.")
+  headerConfig    String   @default("{}")
+  footerConfig    String   @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sections PaperSection[]
+}
+
+// =============================================================================
+// PaperSection
+// A named section within a question paper (e.g. "Section A — Attempt any 5").
+// - order: zero-indexed position of this section within the paper.
+//   When rendering the DOCX, sections are sorted by order ascending.
+// - instructions: optional instructions shown below the section title.
+// =============================================================================
+model PaperSection {
+  id           String   @id @default(cuid())
+  paperId      String
+  title        String
+  instructions String?
+  order        Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  paper     QuestionPaper   @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  questions PaperQuestion[]
+}
+
+// =============================================================================
+// PaperQuestion
+// A single question/content block placed inside a PaperSection.
+//
+// KEY DESIGN DECISION — Content Snapshot:
+// When a teacher adds a ContentItem to a paper, the text and image URL are
+// COPIED into snapshotText and snapshotImageUrl at that moment. This freezes
+// the paper against future edits to the source ContentItem. A teacher editing
+// a ContentItem in the Content Bank will NOT silently alter any finalized paper.
+//
+// - contentItemId: nullable reference back to the source ContentItem.
+//   If the source item is deleted, this becomes null but the snapshot is retained.
+// - marks: marks awarded for this question; used to calculate section totals
+//   and the grand total in the paper editor and DOCX output.
+// - order: zero-indexed position within the parent section.
+// =============================================================================
+model PaperQuestion {
+  id               String   @id @default(cuid())
+  sectionId        String
+  contentItemId    String?
+  snapshotText     String?
+  snapshotImageUrl String?
+  marks            Int      @default(0)
+  order            Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  section     PaperSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  contentItem ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
+}
