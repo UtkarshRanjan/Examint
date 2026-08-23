@@ -26,8 +26,9 @@ import type { GeminiExtractedBlock } from "@/lib/types";
  *   7. Call the Gemini Vision API with the teacher's own encrypted API key.
  *   8. Return the extracted blocks as JSON.
  *
- * The route handler must disable Next.js's built-in body parser because
- * `formidable` handles the raw stream directly.
+ * App Router route handlers never apply the legacy Pages Router body
+ * parser, so `formidable` already receives the raw multipart stream
+ * with no config needed.
  */
 
 /** Maximum allowed file size in bytes (10 MB). */
@@ -39,16 +40,6 @@ const MAX_IMAGE_WIDTH = 1200;
 /** Allowed MIME types for uploaded images. */
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 type AllowedMimeType = (typeof ALLOWED_MIME_TYPES)[number];
-
-/**
- * Disable Next.js body parser for this route so formidable can
- * read the raw multipart stream from the request.
- */
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
 
 /**
  * Converts a Next.js NextRequest into a Node.js IncomingMessage-compatible

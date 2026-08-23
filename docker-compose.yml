@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NEXTAUTH_URL: "http://localhost:3000"
+      NEXTAUTH_SECRET: "${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in your shell or a .env file}"
+      DATABASE_URL: "file:/data/app.db"
+    volumes:
+      - examint_data:/data
+    restart: unless-stopped
+
+volumes:
+  examint_data:

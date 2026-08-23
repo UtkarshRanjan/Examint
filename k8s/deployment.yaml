@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: examint
+  namespace: examint
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: examint
+  template:
+    metadata:
+      labels:
+        app: examint
+    spec:
+      securityContext:
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: dockerhub-creds
+      containers:
+        - name: examint
+          image: vadar/examint@sha256:63322683d4b1a42a7daafd9edf39df938d8074a287690d0ec26a5a70a71da681
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NEXTAUTH_URL
+              value: "https://examint.sandbox.culvii.com"
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: examint-secrets
+                  key: NEXTAUTH_SECRET
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: examint-data

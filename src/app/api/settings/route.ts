@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import bcrypt from "bcryptjs";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { encrypt, decrypt } from "@/lib/encrypt";
+import { encrypt } from "@/lib/encrypt";
 import { testGeminiApiKey } from "@/lib/gemini";
 
 /**
@@ -215,22 +215,3 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(result);
 }
 
-/**
- * GET /api/settings/gemini-key
- *
- * Returns the decrypted Gemini API key for the current user.
- * This endpoint is called exclusively by server-side API routes (like
- * /api/extract) that need the plaintext key to call Gemini.
- * It is NOT called from the client-side settings page.
- *
- * Response: { apiKey: string } — empty string if no key is set.
- */
-export async function getDecryptedGeminiKey(userId: string): Promise<string> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { geminiApiKey: true },
-  });
-
-  if (!user?.geminiApiKey) return "";
-  return decrypt(user.geminiApiKey);
-}
