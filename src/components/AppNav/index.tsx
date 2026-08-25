@@ -3,9 +3,18 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { BookOpen, Upload, Library, FileText, Settings, LogOut } from "lucide-react";
+import {
+  BookOpen,
+  Upload,
+  Library,
+  FileText,
+  Settings,
+  Users,
+  LogOut,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { canAccessPath, type Role } from "@/lib/roles";
 
 /**
  * Navigation item definition — used to build the top nav links.
@@ -16,12 +25,18 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
-/** Primary navigation links shown in the top bar for all app pages. */
+/**
+ * All primary navigation links. The list actually rendered for a given
+ * user is filtered down via `canAccessPath()` so each role only sees the
+ * links their role can reach — kept in sync with `middleware.ts` and
+ * `src/lib/roles.ts`'s `PAGE_ACCESS` map.
+ */
 const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Dashboard", icon: BookOpen },
   { href: "/upload", label: "Upload", icon: Upload },
   { href: "/content", label: "Content Bank", icon: Library },
   { href: "/papers", label: "Papers", icon: FileText },
+  { href: "/users", label: "User Management", icon: Users },
 ];
 
 /**
@@ -29,7 +44,8 @@ const NAV_ITEMS: NavItem[] = [
  *
  * Features:
  * - Examint logo/wordmark on the left.
- * - Primary nav links in the centre — active link is highlighted.
+ * - Primary nav links in the centre, filtered by the user's role —
+ *   active link is highlighted.
  * - Teacher name display on the right.
  * - Settings icon link and Sign Out button on the far right.
  *
@@ -40,14 +56,22 @@ const NAV_ITEMS: NavItem[] = [
  * The `user` prop is passed down from the server-side AppLayout so we
  * don't need an additional client-side session fetch.
  *
- * @param user - The authenticated user's session data (id, name, email).
+ * @param user - The authenticated user's session data (id, name, email, role).
  */
 export default function AppNav({
   user,
 }: {
-  user: { id: string; name?: string | null; email?: string | null };
+  user: {
+    id: string;
+    name?: string | null;
+    email?: string | null;
+    role: Role;
+  };
 }) {
   const pathname = usePathname();
+  const visibleNavItems = NAV_ITEMS.filter((item) =>
+    canAccessPath(user.role, item.href)
+  );
 
   /**
    * Determines if a nav link is currently active.
@@ -76,7 +100,7 @@ export default function AppNav({
 
           {/* Primary navigation links */}
           <nav className="flex items-center gap-1">
-            {NAV_ITEMS.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               return (
                 <Link
