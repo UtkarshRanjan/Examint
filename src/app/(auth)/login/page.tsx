@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -35,7 +35,6 @@ import { Label } from "@/components/ui/label";
  * page after successful login.
  */
 export default function LoginPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams?.get("callbackUrl") ?? "/";
 
@@ -68,8 +67,9 @@ export default function LoginPage() {
         toast.error("Invalid email or password. Please try again.");
       } else if (result?.ok) {
         toast.success("Logged in successfully!");
-        router.push(callbackUrl);
-        router.refresh(); // Force Next.js to re-fetch server-side session data
+        // Full navigation ensures the session cookie is sent before middleware
+        // runs on the protected route (router.push can race the cookie write).
+        window.location.assign(callbackUrl);
       }
     } catch {
       toast.error("Something went wrong. Please try again.");
