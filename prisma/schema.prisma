@@ -32,6 +32,12 @@ model User {
   email        String   @unique
   passwordHash String
   geminiApiKey String?
+  // One of: ADMINISTRATOR | DEVELOPER | TEACHER | MANAGEMENT.
+  // Not a native Prisma enum — SQLite's connector doesn't support them
+  // (same convention as ContentItem.type). Validated in application code
+  // via `ROLES` in src/lib/roles.ts. All self-registered accounts default
+  // to TEACHER; only a DEVELOPER can promote/demote via User Management.
+  role         String   @default("TEACHER")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
