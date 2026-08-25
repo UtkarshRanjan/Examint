@@ -1,19 +1,27 @@
 import { withAuth } from "next-auth/middleware";
 import { NextResponse } from "next/server";
+import { canAccessPath, type Role } from "@/lib/roles";
 
 /**
- * Examint — Authentication Middleware
+ * Examint — Authentication & Role-Based Access Middleware
  *
  * Protects all application routes under the `(app)` route group and all
- * API routes (except the auth and upload-serve endpoints).
+ * API routes (except the auth and upload-serve endpoints), in two layers:
  *
- * How it works:
- * - `withAuth` from next-auth/middleware checks for a valid session token
- *   (the JWT cookie set at login).
- * - If the token is missing or expired, the user is redirected to `/login`.
- * - The `authorized` callback below returns `true` only when a valid token
- *   is present — any request without a token fails the check and triggers
- *   the redirect to `pages.signIn`.
+ * 1. Authentication (via `withAuth`'s `authorized` callback): if no valid
+ *    session token exists, redirect to `/login`. Unchanged from before.
+ * 2. Role-based page access (in the `middleware` function body below,
+ *    which only runs once `authorized` has already returned true): the
+ *    signed-in user's role must be allowed to reach the requested path,
+ *    per `canAccessPath()` in `src/lib/roles.ts`. If not, redirect to the
+ *    Dashboard with `?unauthorized=1` so it can show a toast.
+ *
+ * The role read here comes directly from the signed JWT cookie (Edge
+ * runtime can't query the database). A role change made in User
+ * Management takes effect here as soon as the user's session is next
+ * read in a Node context (see the `jwt` callback in `src/lib/auth.ts`),
+ * which for a logged-in user happens on the very next page load — so at
+ * most one request can see a briefly stale role after a change.
  *
  * Routes NOT protected (matcher excludes these):
  *   /login         — the sign-in page itself
@@ -23,12 +31,21 @@ import { NextResponse } from "next/server";
  *   /favicon.ico   — browser icon
  */
 export default withAuth(
-  function middleware() {
-    // The middleware function body runs only when `authorized` returns true.
-    // We don't need to do anything extra here — simply passing through is fine.
+  function middleware(req) {
+    const role: Role = (req.nextauth.token?.role as Role) ?? "TEACHER";
+    const { pathname } = req.nextUrl;
+
+    if (!canAccessPath(role, pathname)) {
+      return NextResponse.redirect(new URL("/?unauthorized=1", req.url));
+    }
+
     return NextResponse.next();
   },
   {
+    // Required so Edge middleware can decode the session JWT. Without this,
+    // login succeeds (Node API routes read .env at runtime) but protected
+    // pages still redirect to /login because middleware sees no token.
+    secret: process.env.NEXTAUTH_SECRET,
     callbacks: {
       /**
        * Returns true if the request has a valid NextAuth session token.
