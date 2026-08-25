@@ -2,6 +2,7 @@ import { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import type { Role } from "@/lib/roles";
 
 /**
  * Examint — NextAuth.js Configuration
@@ -58,6 +59,7 @@ export const authOptions: NextAuthOptions = {
             name: true,
             email: true,
             passwordHash: true,
+            role: true,
           },
         });
 
@@ -81,6 +83,7 @@ export const authOptions: NextAuthOptions = {
           id: user.id,
           name: user.name,
           email: user.email,
+          role: user.role as Role,
         };
       },
     }),
@@ -109,9 +112,20 @@ export const authOptions: NextAuthOptions = {
    */
   callbacks: {
     /**
-     * Persists the user's database `id` into the JWT so it is available
-     * in the `session` callback and in API routes via `token.sub` or
-     * the augmented `session.user.id`.
+     * Persists the user's database `id` and `role` into the JWT.
+     *
+     * On first sign-in, `user` (from `authorize()`) is used directly. On
+     * every later call — i.e. whenever a Node-side session is read via
+     * `getServerSession` in a page, layout, or API route — `user` is
+     * absent, so the current role is re-read from the database. This
+     * means a role change made in User Management takes effect the next
+     * time the affected user's session is read server-side, without
+     * requiring them to log out.
+     *
+     * Note: `middleware.ts` runs on the Edge runtime and decodes this
+     * JWT directly without invoking this callback, so its view of the
+     * role can lag by up to one request after a change — an accepted
+     * trade-off documented in the design spec.
      *
      * @param token - The current JWT payload.
      * @param user  - The user object returned by `authorize()` (only present
@@ -120,13 +134,30 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
+        token.role = user.role;
+        return token;
       }
+
+      if (token.id) {
+        try {
+          const dbUser = await prisma.user.findUnique({
+            where: { id: token.id as string },
+            select: { role: true },
+          });
+          if (dbUser) {
+            token.role = dbUser.role as Role;
+          }
+        } catch {
+          // Keep the previously known role if the DB lookup fails transiently.
+        }
+      }
+
       return token;
     },
 
     /**
-     * Exposes the user's `id` on the `session.user` object so that client
-     * components and API routes can access it as `session.user.id`.
+     * Exposes the user's `id` and `role` on the `session.user` object so
+     * that client components and API routes can access them directly.
      *
      * @param session - The current session object.
      * @param token   - The JWT payload populated by the `jwt` callback above.
@@ -134,6 +165,7 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       if (token.id && session.user) {
         session.user.id = token.id as string;
+        session.user.role = (token.role as Role) ?? "TEACHER";
       }
       return session;
     },
@@ -163,12 +195,17 @@ export const authOptions: NextAuthOptions = {
  * when accessing the user ID throughout the application.
  */
 declare module "next-auth" {
+  interface User {
+    role: Role;
+  }
+
   interface Session {
     user: {
       id: string;
       name?: string | null;
       email?: string | null;
       image?: string | null;
+      role: Role;
     };
   }
 }
@@ -176,5 +213,6 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     id?: string;
+    role?: Role;
   }
 }
