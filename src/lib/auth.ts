@@ -191,8 +191,9 @@ export const authOptions: NextAuthOptions = {
 /**
  * TypeScript module augmentation.
  * Extends the built-in NextAuth Session and JWT types to include the
- * `id` field on `session.user` and `token.id`, providing type safety
- * when accessing the user ID throughout the application.
+ * `id` and `role` fields on `session.user`/`User`, and `id`/`role` on
+ * the JWT `token`, providing type safety when accessing them throughout
+ * the application.
  */
 declare module "next-auth" {
   interface User {
