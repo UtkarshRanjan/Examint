@@ -1,5 +1,7 @@
 import type { GeminiExtractedBlock, ContentItemType, CONTENT_ITEM_TYPES as _ } from "@/lib/types";
 import { CONTENT_ITEM_TYPES } from "@/lib/types";
+import { prisma } from "@/lib/prisma";
+import { decrypt } from "@/lib/encrypt";
 
 /**
  * Examint — Google Gemini Vision API Wrapper
@@ -274,4 +276,18 @@ export async function testGeminiApiKey(
       error: `Network error: ${String(err)}`,
     };
   }
+}
+
+/**
+ * Returns the decrypted Gemini API key for a user.
+ * Used by server-side routes (e.g. /api/extract) that call Gemini.
+ */
+export async function getDecryptedGeminiKey(userId: string): Promise<string> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { geminiApiKey: true },
+  });
+
+  if (!user?.geminiApiKey) return "";
+  return decrypt(user.geminiApiKey);
 }

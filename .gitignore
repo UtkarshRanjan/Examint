@@ -1,2 +1,57 @@
-# Node.js dependencies — install with: npm install
+# --- Next.js build output ---
+.next/
+out/
+
+# --- Node.js ---
 node_modules/
+
+# --- Environment variables (NEVER commit these) ---
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- SQLite database (contains all teacher data) ---
+# BACK THIS UP: copy prisma/dev.db to a safe location regularly
+prisma/*.db
+prisma/*.db-journal
+
+# --- Uploaded images (contains all teacher-uploaded content) ---
+# BACK THIS UP: copy the entire uploads/ folder to a safe location regularly
+uploads/
+
+# --- OS / Editor artifacts ---
+.DS_Store
+Thumbs.db
+*.pem
+
+# --- Debug logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.cookies.txt
+
+# --- TypeScript build info ---
+*.tsbuildinfo
+next-env.d.ts
+
+# --- Git hooks ---
+.githooks/
+
+# --- Demo tunnel (only used during local demo setup) ---
+.demo-tunnel.pid
+.demo-tunnel.log
+scripts/demo-tunnel.mjs
+
+# --- IDE configuration ---
+.idea/
+.vscode/
+.cursorrules
+.cursor/
+
+# --- planning docs and notes ---
+plan/
+docs/
+.teacher_question_paper_app_planning.md
+.teacher_question_paper_app_f58dc155.plan.md

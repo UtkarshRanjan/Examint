@@ -214,4 +214,3 @@ export async function POST(request: NextRequest) {
   const result = await testGeminiApiKey(body.apiKey.trim());
   return NextResponse.json(result);
 }
-
