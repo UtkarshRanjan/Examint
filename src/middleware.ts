@@ -35,6 +35,12 @@ export default withAuth(
     const role: Role = (req.nextauth.token?.role as Role) ?? "TEACHER";
     const { pathname } = req.nextUrl;
 
+    // API routes enforce their own authorization in route handlers; middleware
+    // only applies the page-level access map to UI routes.
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.next();
+    }
+
     if (!canAccessPath(role, pathname)) {
       return NextResponse.redirect(new URL("/?unauthorized=1", req.url));
     }
