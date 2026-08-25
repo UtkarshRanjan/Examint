@@ -1,0 +1,9 @@
+---
+description: Git commit message conventions
+alwaysApply: true
+---
+
+# Git Commit Conventions
+
+- Never include a `Co-authored-by: Cursor <cursoragent@cursor.com>` trailer (or any similar Cursor co-author attribution) in any git commit message, under any circumstances.
+- Write commit messages using only the standard `-m` heredoc pattern already described in this agent's git safety protocol, with no added attribution trailers.
