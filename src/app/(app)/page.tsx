@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Library,
@@ -50,8 +51,19 @@ interface DashboardData {
  * endpoints (no dedicated dashboard API needed).
  */
 export default function DashboardPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Shown when middleware redirects here because the signed-in user's role
+  // doesn't have access to the page they tried to reach.
+  useEffect(() => {
+    if (searchParams?.get("unauthorized") === "1") {
+      toast.error("You don't have access to that page.");
+      router.replace("/");
+    }
+  }, [searchParams, router]);
 
   useEffect(() => {
     async function loadDashboard() {
