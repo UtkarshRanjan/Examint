@@ -10,6 +10,7 @@ import {
   FileText,
   Settings,
   Users,
+  Database,
   LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/content", label: "Content Bank", icon: Library },
   { href: "/papers", label: "Papers", icon: FileText },
   { href: "/users", label: "User Management", icon: Users },
+  { href: "/database", label: "Database", icon: Database },
 ];
 
 /**

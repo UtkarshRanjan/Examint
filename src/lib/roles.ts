@@ -42,7 +42,15 @@ export const ROLE_LABELS: Record<Role, string> = {
  *   management accounts don't create content.
  */
 export const PAGE_ACCESS: Record<Role, string[]> = {
-  DEVELOPER: ["/", "/upload", "/content", "/papers", "/settings", "/users"],
+  DEVELOPER: [
+    "/",
+    "/upload",
+    "/content",
+    "/papers",
+    "/settings",
+    "/users",
+    "/database",
+  ],
   ADMINISTRATOR: ["/", "/upload", "/content", "/papers", "/settings"],
   TEACHER: ["/", "/upload", "/content", "/papers", "/settings"],
   MANAGEMENT: ["/", "/papers", "/settings"],
