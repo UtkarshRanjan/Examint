@@ -6,6 +6,10 @@ FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
+# The "prepare" script wires up local git hooks (core.hooksPath) — meaningless
+# inside a container build, and this stage has no .git directory for it to
+# configure anyway, so drop just that one script before installing.
+RUN npm pkg delete scripts.prepare
 RUN npm ci
 
 # -----------------------------------------------------------------------------
