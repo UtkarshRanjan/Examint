@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { IncomingMessage } from "http";
-import formidable, { type File as FormidableFile } from "formidable";
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -18,7 +16,7 @@ import type { GeminiExtractedBlock } from "@/lib/types";
  * Accepts a multipart/form-data POST request containing an image file.
  * Processes the image through the following pipeline:
  *   1. Authenticate the request (NextAuth session required).
- *   2. Parse the multipart upload with `formidable`.
+ *   2. Parse the multipart upload using the native Request.formData() API.
  *   3. Validate file type (JPEG/PNG/WebP) and size (max 10 MB).
  *   4. Resize the image to a maximum 1200px width using `sharp` (bandwidth/quota optimisation).
  *   5. Write the resized image to `uploads/<userId>/` with a UUID filename.
@@ -26,9 +24,9 @@ import type { GeminiExtractedBlock } from "@/lib/types";
  *   7. Call the Gemini Vision API with the teacher's own encrypted API key.
  *   8. Return the extracted blocks as JSON.
  *
- * App Router route handlers never apply the legacy Pages Router body
- * parser, so `formidable` already receives the raw multipart stream
- * with no config needed.
+ * App Router route handlers expose the Fetch API Request, whose .formData()
+ * method parses multipart/form-data natively — no formidable/IncomingMessage
+ * adapter is needed.
  */
 
 /** Maximum allowed file size in bytes (10 MB). */
@@ -42,69 +40,21 @@ const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 type AllowedMimeType = (typeof ALLOWED_MIME_TYPES)[number];
 
 /**
- * Converts a Next.js NextRequest into a Node.js IncomingMessage-compatible
- * object that formidable can parse.
- *
- * Next.js App Router uses the Fetch API (Request/Response), while formidable
- * expects a Node.js IncomingMessage (http.IncomingMessage). This adapter
- * reads the request body as a Buffer and wraps it in a readable stream.
+ * Parses a multipart form upload using the native Request.formData() API.
  *
  * @param request - The Next.js App Router request object.
- * @returns A fake IncomingMessage with the headers and body stream.
- */
-async function toNodeRequest(request: NextRequest): Promise<IncomingMessage> {
-  const arrayBuffer = await request.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  const { Readable } = await import("stream");
-  const readable = new Readable();
-  readable.push(buffer);
-  readable.push(null);
-
-  // Cast to IncomingMessage — formidable only reads headers and body stream.
-  const nodeReq = Object.assign(readable, {
-    headers: Object.fromEntries(request.headers.entries()),
-    method: request.method,
-    url: request.url,
-  }) as unknown as IncomingMessage;
-
-  return nodeReq;
-}
-
-/**
- * Parses a multipart form upload using formidable.
- *
- * @param nodeReq - The Node.js IncomingMessage-compatible request stream.
- * @returns A Promise resolving to the parsed file (first file in the "image" field).
+ * @returns A Promise resolving to the uploaded File from the "image" field.
  * @throws Error if no file is found in the upload.
  */
-async function parseUpload(
-  nodeReq: IncomingMessage
-): Promise<FormidableFile> {
-  return new Promise((resolve, reject) => {
-    const form = formidable({
-      maxFileSize: MAX_FILE_SIZE,
-      keepExtensions: true,
-      multiples: false,
-    });
+async function parseUpload(request: NextRequest): Promise<File> {
+  const formData = await request.formData();
+  const fileField = formData.get("image");
 
-    form.parse(nodeReq, (err, _fields, files) => {
-      if (err) {
-        reject(new Error(`Upload parsing failed: ${err.message}`));
-        return;
-      }
+  if (!fileField || typeof fileField === "string") {
+    throw new Error("No image file found in the upload. Use the field name 'image'.");
+  }
 
-      const fileField = files.image;
-      const file = Array.isArray(fileField) ? fileField[0] : fileField;
-
-      if (!file) {
-        reject(new Error("No image file found in the upload. Use the field name 'image'."));
-        return;
-      }
-
-      resolve(file);
-    });
-  });
+  return fileField;
 }
 
 /**
@@ -158,27 +108,38 @@ export async function POST(request: NextRequest) {
 
   try {
     // 3. Parse the multipart upload.
-    const nodeReq = await toNodeRequest(request);
-    const uploadedFile = await parseUpload(nodeReq);
+    const uploadedFile = await parseUpload(request);
 
-    // 4. Validate MIME type.
-    const mimeType = uploadedFile.mimetype as AllowedMimeType | null;
-    if (!mimeType || !(ALLOWED_MIME_TYPES as readonly string[]).includes(mimeType)) {
+    // 4. Validate file size.
+    if (uploadedFile.size > MAX_FILE_SIZE) {
       return NextResponse.json(
         {
-          error: `Unsupported file type: ${mimeType ?? "unknown"}. Only JPEG, PNG, and WebP are accepted.`,
+          error: `File too large (${(uploadedFile.size / 1024 / 1024).toFixed(1)} MB). Max 10 MB.`,
         },
         { status: 400 }
       );
     }
 
-    // 5. Resize the image with sharp (max 1200px width).
-    const inputBuffer = fs.readFileSync(uploadedFile.filepath);
+    // 5. Validate MIME type.
+    const mimeType = uploadedFile.type as AllowedMimeType;
+    if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(mimeType)) {
+      return NextResponse.json(
+        {
+          error: `Unsupported file type: ${mimeType || "unknown"}. Only JPEG, PNG, and WebP are accepted.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // 6. Read the uploaded file into a Buffer.
+    const inputBuffer = Buffer.from(await uploadedFile.arrayBuffer());
+
+    // 7. Resize the image with sharp (max 1200px width).
     const resizedBuffer = await sharp(inputBuffer)
       .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
       .toBuffer();
 
-    // 6. Write the resized image to uploads/<userId>/
+    // 8. Write the resized image to uploads/<userId>/
     const userUploadDir = path.join(process.cwd(), "uploads", userId);
     fs.mkdirSync(userUploadDir, { recursive: true });
 
@@ -187,16 +148,13 @@ export async function POST(request: NextRequest) {
     const savedFilePath = path.join(userUploadDir, filename);
     fs.writeFileSync(savedFilePath, resizedBuffer);
 
-    // Clean up the temp file created by formidable.
-    fs.unlinkSync(uploadedFile.filepath);
-
     // Relative URL to serve the image via /api/uploads/[...path]
     const imageUrl = `/api/uploads/${userId}/${filename}`;
 
-    // 7. Encode the resized image as base64 for Gemini.
+    // 9. Encode the resized image as base64 for Gemini.
     const base64Image = resizedBuffer.toString("base64");
 
-    // 8. Call Gemini Vision API.
+    // 10. Call Gemini Vision API.
     const blocks: GeminiExtractedBlock[] = await extractContentFromImage(
       base64Image,
       mimeType,

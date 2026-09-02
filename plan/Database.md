@@ -24,6 +24,8 @@
 8. [Migration Workflow](#8-migration-workflow)
 9. [Key Design Decisions](#9-key-design-decisions)
 10. [Important Warnings](#10-important-warnings)
+11. [Upgrading Prisma to a New Major Version](#11-upgrading-prisma-to-a-new-major-version)
+12. [Common Errors and Fixes](#12-common-errors-and-fixes)
 
 ---
 
@@ -65,6 +67,7 @@ DATABASE_URL="file:./prisma/dev.db"
 | `email` | String | Required, Unique | Login email — must be unique across all accounts |
 | `passwordHash` | String | Required | bcrypt-hashed password; plain text is never stored |
 | `geminiApiKey` | String | Optional | AES-256-GCM encrypted Google AI Studio key |
+| `role` | String | Default: `"TEACHER"` | Account role. One of: `ADMINISTRATOR`, `DEVELOPER`, `TEACHER`, `MANAGEMENT`. Stored as plain string (SQLite has no native enum). Validated in app code via `src/lib/roles.ts`. Only a `DEVELOPER` can promote/demote accounts. |
 | `createdAt` | DateTime | Auto (`now()`) | Timestamp when the account was created |
 | `updatedAt` | DateTime | Auto (`@updatedAt`) | Timestamp of the last update |
 
@@ -406,3 +409,175 @@ When a teacher adds a `ContentItem` to a paper, the text and image URL are **cop
 | `db:push` skips migration files | Changes pushed with `db push` are not tracked and will be lost on a reset. Use `db:migrate` for persistent changes. |
 | Backup `dev.db` before bulk deletes | SQLite has no recycle bin. Cascade deletes are permanent. |
 | JSON columns need app-level parsing | Never write raw text into `headerConfig`/`footerConfig` unless it is valid JSON. |
+
+---
+
+## 11. Upgrading Prisma to a New Major Version
+
+When running `npm run db:studio` or any Prisma CLI command, you may see an upgrade notice like:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Update available 5.22.0 -> 8.0.0-rc.12                 │
+│                                                         │
+│  This is a major update - please follow the guide at    │
+│  https://pris.ly/d/major-version-upgrade                │
+│                                                         │
+│  Run the following to update                            │
+│    npm i --save-dev prisma@latest                       │
+│    npm i @prisma/client@latest                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Do NOT just run the two install commands blindly.** A major version bump (e.g. 5.x → 8.x) can include breaking changes in the schema syntax, CLI commands, and client API. Follow this safe upgrade procedure:
+
+### Step 1 — Read the migration guide
+
+Before touching any code, read the official guide shown in the notice:
+**https://pris.ly/d/major-version-upgrade**
+
+Note down any breaking changes that affect:
+- `schema.prisma` syntax
+- CLI command names or flags
+- `PrismaClient` API methods used in the codebase
+
+### Step 2 — Check what the codebase uses
+
+Search for all Prisma client usages to understand impact:
+
+```powershell
+# Find all files that import from @prisma/client or lib/prisma
+Get-ChildItem -Path src -Recurse -Filter "*.ts" | Select-String "@prisma/client|lib/prisma"
+```
+
+### Step 3 — Upgrade in a separate git branch
+
+```powershell
+git checkout -b upgrade/prisma-v8
+```
+
+### Step 4 — Install the new versions
+
+```powershell
+npm i --save-dev prisma@latest
+npm i @prisma/client@latest
+```
+
+### Step 5 — Regenerate the Prisma Client
+
+```powershell
+npx prisma generate
+```
+
+Fix any TypeScript errors that surface — these reveal places where the client API changed.
+
+### Step 6 — Verify the database is still in sync
+
+```powershell
+npx prisma migrate status
+```
+
+All migrations should still show `Applied`. If there is drift, run `npx prisma migrate dev`.
+
+### Step 7 — Run and test the app
+
+```powershell
+npm run dev
+```
+
+Test every feature that touches the database: login, content bank, paper creation, export.
+
+### Step 8 — Merge the branch
+
+Once all tests pass, merge the upgrade branch into `main`.
+
+> **Note (Sep 2026):** The project is currently on Prisma **5.22.0**. Version **8.0.0-rc.12** is a release candidate — wait for a stable 8.x release before upgrading in production.
+
+---
+
+## 12. Common Errors and Fixes
+
+This section records real errors encountered during development and their resolutions, as a quick reference for future debugging.
+
+---
+
+### Error 1 — `The column does not exist in the current database`
+
+**Full error message (as seen in the dev server terminal):**
+
+```
+prisma:error
+Invalid `prisma.user.findUnique()` invocation:
+
+The column `main.User.role` does not exist in the current database.
+```
+
+**Symptom:** Every login attempt or page load that queries the `User` table crashes with a 500 error in the browser.
+
+**Root cause — Schema drift (migration not applied):**
+
+| What happened | State |
+|---|---|
+| A new field (`role`) was added to the `User` model in `schema.prisma` | Schema updated ✓ |
+| `npx prisma generate` was run | PrismaClient regenerated ✓ |
+| `npx prisma migrate dev` was **NOT** run | Database column missing ✗ |
+
+The generated Prisma Client now includes `role` in every `SELECT` query, but the actual SQLite table has no `role` column — causing every query to fail.
+
+**Fix:**
+
+```powershell
+npx prisma migrate dev
+```
+
+Prisma detects the unapplied migration (e.g. `20260825132454_add_user_role`) and applies it. The column is added to the database and all existing rows are backfilled with the default value (`TEACHER`).
+
+**Verify the fix:**
+
+```powershell
+npx prisma migrate status
+```
+
+All entries should show `Applied`. The dev server will automatically recover — no restart needed.
+
+**Prevention:** Always run `npx prisma migrate dev` immediately after editing `schema.prisma`. Never run `npx prisma generate` alone when the schema change adds or removes columns.
+
+---
+
+### Error 2 — `EPERM: operation not permitted, rename query_engine-windows.dll.node`
+
+**Full error message (as seen after running `npx prisma migrate dev` on Windows):**
+
+```
+EPERM: operation not permitted, rename
+'...\node_modules\.prisma\client\query_engine-windows.dll.node.tmp21704'
+-> '...\node_modules\.prisma\client\query_engine-windows.dll.node'
+```
+
+**Symptom:** The message appears at the end of a `prisma migrate dev` or `prisma generate` run. The migration itself completes successfully (`exit_code: 0`), but the client regeneration step fails.
+
+**Root cause — Windows file lock:**
+
+When the Next.js dev server is running, it loads `query_engine-windows.dll.node` into memory. Windows locks any DLL that is actively loaded by a running process. When Prisma tries to replace the file during `prisma generate`, the OS blocks the rename with an `EPERM` (operation not permitted) error.
+
+This does **not** happen on Linux or macOS, where the OS allows files to be replaced while a process holds an open reference to the old inode.
+
+**Fix (3 steps):**
+
+1. Stop the dev server — press `Ctrl+C` in the terminal running `npm run dev` to release the file lock.
+
+2. Regenerate the Prisma Client cleanly:
+
+```powershell
+npx prisma generate
+```
+
+3. Restart the dev server:
+
+```powershell
+npm run dev
+```
+
+**Why this matters:** Until `prisma generate` completes successfully, the in-memory PrismaClient in the dev server may be out of sync with the latest schema. Always ensure the generate step finishes without errors before testing schema changes.
+
+**Prevention:** Always stop the dev server before running `prisma migrate dev` or `prisma generate` on Windows.
