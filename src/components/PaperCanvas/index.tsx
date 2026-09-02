@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -12,11 +12,7 @@ import {
   closestCenter,
   DragOverlay,
 } from "@dnd-kit/core";
-import {
-  SortableContext,
-  arrayMove,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { arrayMove } from "@dnd-kit/sortable";
 import { toast } from "sonner";
 import { Plus, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,12 +21,13 @@ import type {
   PaperSectionData,
   PaperQuestionData,
 } from "@/components/PaperSection";
-import { sumMarks } from "@/lib/utils";
+import {
+  getSubquestions,
+  getTopLevelQuestions,
+  sumSectionMarks,
+} from "@/lib/paper-questions";
+import type { NumberingFormat } from "@/lib/types";
 
-/**
- * Data shape for a content item dragged from the sidebar.
- * The `dnd-item-*` prefix in the draggable ID identifies sidebar items.
- */
 interface SidebarContentItem {
   id: string;
   type: string;
@@ -38,20 +35,14 @@ interface SidebarContentItem {
   imageUrl: string | null;
 }
 
-/**
- * Props for the PaperCanvas component.
- */
 interface PaperCanvasProps {
   paperId: string;
+  numberingFormat: NumberingFormat;
   initialSections: PaperSectionData[];
-  /** Called to persist any section/question mutations to the server. */
   onSave: (operations: PaperOperation[]) => Promise<void>;
+  sidebar?: ReactNode;
 }
 
-/**
- * Operation types passed to the onSave callback for persistence.
- * Mirrors the server-side PaperOperation union in /api/papers/[id]/route.ts.
- */
 type PaperOperation =
   | { type: "ADD_SECTION"; title: string; instructions?: string }
   | { type: "UPDATE_SECTION"; sectionId: string; title?: string; instructions?: string }
@@ -64,72 +55,78 @@ type PaperOperation =
       snapshotText?: string;
       snapshotImageUrl?: string;
       marks?: number;
+      parentQuestionId?: string | null;
     }
   | { type: "UPDATE_QUESTION"; questionId: string; marks?: number; snapshotText?: string }
   | { type: "DELETE_QUESTION"; questionId: string }
-  | { type: "REORDER_QUESTIONS"; sectionId: string; questionIds: string[] };
+  | {
+      type: "REORDER_QUESTIONS";
+      sectionId: string;
+      questionIds: string[];
+      parentQuestionId?: string | null;
+    };
 
-/**
- * PaperCanvas — The right panel of the Paper Editor.
- *
- * Manages the live state of all sections and questions in the paper.
- * Handles:
- * - Adding sections via the "Add Section" button.
- * - Deleting / updating sections (title, instructions).
- * - Receiving content items dropped from the sidebar (via DnD).
- * - Duplicate guard: prevents the same ContentItem from being added twice.
- * - Within-section question reordering via @dnd-kit.
- * - Live marks total displayed in the sticky header.
- * - All mutations are saved to the server via the `onSave` callback.
- *
- * @param paperId - The ID of the paper being edited.
- * @param initialSections - The sections loaded from the database.
- * @param onSave - Async callback to persist operations to /api/papers/[id].
- */
+function findQuestionInSections(
+  sections: PaperSectionData[],
+  questionId: string
+): { section: PaperSectionData; question: PaperQuestionData } | null {
+  for (const section of sections) {
+    const question = section.questions.find((q) => q.id === questionId);
+    if (question) return { section, question };
+  }
+  return null;
+}
+
 export default function PaperCanvas({
   paperId,
+  numberingFormat,
   initialSections,
   onSave,
+  sidebar,
 }: PaperCanvasProps) {
   const [sections, setSections] = useState<PaperSectionData[]>(initialSections);
+
+  useEffect(() => {
+    setSections(initialSections);
+  }, [initialSections]);
+
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const [activeDropSectionId, setActiveDropSectionId] = useState<string | null>(null);
+  const [activeDropParentQuestionId, setActiveDropParentQuestionId] = useState<
+    string | null
+  >(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Configure DnD sensors. PointerSensor activates after 8px of movement
-  // to avoid accidental drags when clicking buttons inside the draggable rows.
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 8 },
     })
   );
 
-  /** Total marks across all sections. */
-  const grandTotal = sumMarks(sections.flatMap((s) => s.questions));
+  const grandTotal = sections.reduce(
+    (sum, section) => sum + sumSectionMarks(section.questions),
+    0
+  );
 
-  /**
-   * Persists a list of operations to the server via the onSave callback.
-   * Wraps the call in a loading state; shows an error toast on failure.
-   *
-   * @param operations - The list of paper operations to apply.
-   */
   async function persist(operations: PaperOperation[]) {
     setIsSaving(true);
+    const snapshot = sections;
     try {
       await onSave(operations);
-    } catch {
-      toast.error("Failed to save changes. Please try again.");
+    } catch (err) {
+      setSections(snapshot);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Failed to save changes. Please try again."
+      );
     } finally {
       setIsSaving(false);
     }
   }
 
-  /**
-   * Adds a new section to the paper.
-   * Applies an optimistic local state update, then persists.
-   */
   async function handleAddSection() {
-    const title = `Section ${String.fromCharCode(65 + sections.length)}`; // A, B, C, …
+    const title = `Section ${String.fromCharCode(65 + sections.length)}`;
     const tempId = `temp-${Date.now()}`;
     const newSection: PaperSectionData = {
       id: tempId,
@@ -141,18 +138,8 @@ export default function PaperCanvas({
 
     setSections((prev) => [...prev, newSection]);
     await persist([{ type: "ADD_SECTION", title }]);
-
-    // Reload sections from server to get the real DB-assigned ID.
-    // The parent PaperEditorPage handles re-fetching via onSave.
   }
 
-  /**
-   * Updates a section's title and/or instructions.
-   * Applies an optimistic local update, then persists.
-   *
-   * @param sectionId - The section to update.
-   * @param updates   - The fields to update.
-   */
   async function handleUpdateSection(
     sectionId: string,
     updates: { title?: string; instructions?: string }
@@ -174,22 +161,11 @@ export default function PaperCanvas({
     await persist([{ type: "UPDATE_SECTION", sectionId, ...updates }]);
   }
 
-  /**
-   * Deletes a section and all its questions.
-   *
-   * @param sectionId - The section to delete.
-   */
   async function handleDeleteSection(sectionId: string) {
     setSections((prev) => prev.filter((s) => s.id !== sectionId));
     await persist([{ type: "DELETE_SECTION", sectionId }]);
   }
 
-  /**
-   * Updates the marks value for a single question.
-   *
-   * @param questionId - The question to update.
-   * @param marks      - The new marks value.
-   */
   async function handleUpdateQuestionMarks(questionId: string, marks: number) {
     setSections((prev) =>
       prev.map((s) => ({
@@ -202,75 +178,66 @@ export default function PaperCanvas({
     await persist([{ type: "UPDATE_QUESTION", questionId, marks }]);
   }
 
-  /**
-   * Removes a question from its section.
-   *
-   * @param questionId - The question to remove.
-   */
   async function handleDeleteQuestion(questionId: string) {
     setSections((prev) =>
       prev.map((s) => ({
         ...s,
-        questions: s.questions.filter((q) => q.id !== questionId),
+        questions: s.questions.filter(
+          (q) => q.id !== questionId && q.parentQuestionId !== questionId
+        ),
       }))
     );
     await persist([{ type: "DELETE_QUESTION", questionId }]);
   }
 
-  // ==========================================================================
-  // Drag and Drop handlers
-  // ==========================================================================
-
-  /**
-   * DragStart handler — tracks which item is being dragged.
-   * Sidebar items have IDs prefixed with "sidebar-".
-   * Within-section question items use their database question IDs.
-   */
   function handleDragStart(event: DragStartEvent) {
     setActiveDragId(String(event.active.id));
   }
 
-  /**
-   * DragOver handler — tracks which section the drag is hovering over.
-   * Used to highlight the drop target section with a blue border.
-   *
-   * @param event - The DragOverEvent from @dnd-kit.
-   */
   function handleDragOver(event: DragOverEvent) {
     const overId = event.over?.id;
     if (!overId) {
       setActiveDropSectionId(null);
+      setActiveDropParentQuestionId(null);
       return;
     }
 
-    // Check if hovering over a section container (data.droppableSection set on
-    // the section's DnD droppable zone).
     const overData = event.over?.data?.current as
-      | { droppableSection?: string }
+      | { droppableSection?: string; droppableParentQuestion?: string }
       | undefined;
+
+    if (overData?.droppableParentQuestion) {
+      setActiveDropParentQuestionId(overData.droppableParentQuestion);
+      const parent = findQuestionInSections(
+        sections,
+        overData.droppableParentQuestion
+      );
+      setActiveDropSectionId(parent?.section.id ?? null);
+      return;
+    }
+
+    setActiveDropParentQuestionId(null);
 
     if (overData?.droppableSection) {
       setActiveDropSectionId(overData.droppableSection);
+      return;
+    }
+
+    const hit = findQuestionInSections(sections, String(overId));
+    if (hit) {
+      setActiveDropSectionId(hit.section.id);
+      if (!hit.question.parentQuestionId) {
+        setActiveDropParentQuestionId(hit.question.id);
+      }
     } else {
-      // Hovering over a question — find which section it belongs to.
-      const parentSection = sections.find((s) =>
-        s.questions.some((q) => q.id === overId)
-      );
-      setActiveDropSectionId(parentSection?.id ?? null);
+      setActiveDropSectionId(null);
     }
   }
 
-  /**
-   * DragEnd handler — processes the drop action.
-   *
-   * Two cases:
-   * 1. Sidebar item dropped onto a section → add it as a new question.
-   * 2. Question dropped onto a different position within (or between) sections
-   *    → reorder the questions.
-   */
   async function handleDragEnd(event: DragEndEvent) {
     setActiveDragId(null);
     setActiveDropSectionId(null);
+    setActiveDropParentQuestionId(null);
 
     const { active, over } = event;
     if (!over) return;
@@ -278,120 +245,175 @@ export default function PaperCanvas({
     const activeId = String(active.id);
     const overId = String(over.id);
 
-    // Case 1: Item dragged from the sidebar (ID prefixed with "sidebar-").
     if (activeId.startsWith("sidebar-")) {
       const contentItemId = activeId.replace("sidebar-", "");
-
-      // Find the target section from the droppable data or from the question.
       const overData = over?.data?.current as
-        | { droppableSection?: string }
+        | { droppableSection?: string; droppableParentQuestion?: string }
         | undefined;
 
-      const targetSectionId =
-        overData?.droppableSection ??
-        sections.find((s) => s.questions.some((q) => q.id === overId))?.id;
+      let parentQuestionId = overData?.droppableParentQuestion ?? null;
+      let targetSectionId = overData?.droppableSection ?? null;
+
+      if (parentQuestionId && !targetSectionId) {
+        targetSectionId =
+          findQuestionInSections(sections, parentQuestionId)?.section.id ?? null;
+      }
+
+      const hit = findQuestionInSections(sections, overId);
+      const isSectionDrop = overId.startsWith("section-drop-");
+
+      if (hit && !isSectionDrop) {
+        targetSectionId = hit.section.id;
+        if (hit.question.parentQuestionId) {
+          parentQuestionId = hit.question.parentQuestionId;
+        } else if (!parentQuestionId) {
+          parentQuestionId = hit.question.id;
+        }
+      } else if (isSectionDrop && overData?.droppableSection) {
+        targetSectionId = overData.droppableSection;
+        parentQuestionId = null;
+      }
 
       if (!targetSectionId) {
-        toast.error(
-          "Drop onto a section or its questions to add a content item."
-        );
+        toast.error("Drop onto a section or question to add a content item.");
         return;
       }
 
-      // Duplicate guard: check if this ContentItem is already in any section.
-      const alreadyAdded = sections.some((s) =>
-        s.questions.some((q) => q.contentItemId === contentItemId)
-      );
-
-      if (alreadyAdded) {
-        toast.warning(
-          "This item is already in the paper. Each content item can only appear once."
-        );
-        return;
-      }
-
-      // Get the content item data from the sidebar item's drag data.
-      const sidebarItem = active.data.current?.sidebarItem as
-        | SidebarContentItem
-        | undefined;
-
-      const newQuestion: PaperQuestionData = {
-        id: `temp-${Date.now()}`,
-        sectionId: targetSectionId,
+      await handleSidebarDrop(
         contentItemId,
-        snapshotText: sidebarItem?.textContent ?? null,
-        snapshotImageUrl: sidebarItem?.imageUrl ?? null,
-        marks: 0,
-        order: sections.find((s) => s.id === targetSectionId)?.questions.length ?? 0,
-        type: sidebarItem?.type,
-      };
-
-      setSections((prev) =>
-        prev.map((s) =>
-          s.id === targetSectionId
-            ? { ...s, questions: [...s.questions, newQuestion] }
-            : s
-        )
+        active,
+        targetSectionId,
+        parentQuestionId
       );
-
-      await persist([
-        {
-          type: "ADD_QUESTION",
-          sectionId: targetSectionId,
-          contentItemId,
-          snapshotText: sidebarItem?.textContent ?? undefined,
-          snapshotImageUrl: sidebarItem?.imageUrl ?? undefined,
-          marks: 0,
-        },
-      ]);
-
       return;
     }
 
-    // Case 2: Within-section or between-section question reorder.
-    const sourceSection = sections.find((s) =>
-      s.questions.some((q) => q.id === activeId)
+    const activeHit = findQuestionInSections(sections, activeId);
+    const overHit = findQuestionInSections(sections, overId);
+    if (!activeHit || !overHit) return;
+
+    const activeParentId = activeHit.question.parentQuestionId ?? null;
+    const overParentId = overHit.question.parentQuestionId ?? null;
+    if (activeParentId !== overParentId) return;
+    if (activeHit.section.id !== overHit.section.id) return;
+
+    const siblings = activeHit.section.questions
+      .filter((q) => (q.parentQuestionId ?? null) === activeParentId)
+      .sort((a, b) => a.order - b.order);
+
+    const oldIndex = siblings.findIndex((q) => q.id === activeId);
+    const newIndex = siblings.findIndex((q) => q.id === overId);
+    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
+
+    const reordered = arrayMove(siblings, oldIndex, newIndex);
+    const reorderedIds = new Set(reordered.map((q) => q.id));
+
+    setSections((prev) =>
+      prev.map((s) => {
+        if (s.id !== activeHit.section.id) return s;
+        const others = s.questions.filter((q) => !reorderedIds.has(q.id));
+        return {
+          ...s,
+          questions: [
+            ...others,
+            ...reordered.map((q, index) => ({ ...q, order: index })),
+          ],
+        };
+      })
     );
-    const targetSection = sections.find((s) =>
-      s.questions.some((q) => q.id === overId)
-    );
 
-    if (!sourceSection) return;
-
-    if (sourceSection.id === targetSection?.id || !targetSection) {
-      // Same section — reorder within it.
-      const sectionToReorder = sourceSection;
-      const oldIndex = sectionToReorder.questions.findIndex(
-        (q) => q.id === activeId
-      );
-      const newIndex = sectionToReorder.questions.findIndex(
-        (q) => q.id === overId
-      );
-      if (oldIndex === newIndex) return;
-
-      const reordered = arrayMove(sectionToReorder.questions, oldIndex, newIndex);
-
-      setSections((prev) =>
-        prev.map((s) =>
-          s.id === sectionToReorder.id
-            ? { ...s, questions: reordered }
-            : s
-        )
-      );
-
-      await persist([
-        {
-          type: "REORDER_QUESTIONS",
-          sectionId: sectionToReorder.id,
-          questionIds: reordered.map((q) => q.id),
-        },
-      ]);
-    }
+    await persist([
+      {
+        type: "REORDER_QUESTIONS",
+        sectionId: activeHit.section.id,
+        questionIds: reordered.map((q) => q.id),
+        parentQuestionId: activeParentId,
+      },
+    ]);
   }
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Sticky header: paper stats + add section */}
+  async function handleSidebarDrop(
+    contentItemId: string,
+    active: DragEndEvent["active"],
+    targetSectionId: string,
+    parentQuestionId: string | null
+  ) {
+    const alreadyAdded = sections.some((s) =>
+      s.questions.some((q) => q.contentItemId === contentItemId)
+    );
+
+    if (alreadyAdded) {
+      toast.warning(
+        "This item is already in the paper. Each content item can only appear once."
+      );
+      return;
+    }
+
+    if (targetSectionId.startsWith("temp-")) {
+      toast.error(
+        "This section is still saving. Please wait a moment and try again."
+      );
+      return;
+    }
+
+    if (parentQuestionId?.startsWith("temp-")) {
+      toast.error(
+        "The parent question is still saving. Please wait before adding subquestions."
+      );
+      return;
+    }
+
+    if (isSaving) {
+      toast.error("Please wait for the current save to finish.");
+      return;
+    }
+
+    const sidebarItem = active.data.current?.sidebarItem as
+      | SidebarContentItem
+      | undefined;
+
+    const section = sections.find((s) => s.id === targetSectionId);
+    const siblingCount = section
+      ? parentQuestionId
+        ? getSubquestions(section.questions, parentQuestionId).length
+        : getTopLevelQuestions(section.questions).length
+      : 0;
+
+    const newQuestion: PaperQuestionData = {
+      id: `temp-${Date.now()}`,
+      sectionId: targetSectionId,
+      contentItemId,
+      snapshotText: sidebarItem?.textContent ?? null,
+      snapshotImageUrl: sidebarItem?.imageUrl ?? null,
+      marks: 0,
+      order: siblingCount,
+      parentQuestionId,
+      type: sidebarItem?.type,
+    };
+
+    setSections((prev) =>
+      prev.map((s) =>
+        s.id === targetSectionId
+          ? { ...s, questions: [...s.questions, newQuestion] }
+          : s
+      )
+    );
+
+    await persist([
+      {
+        type: "ADD_QUESTION",
+        sectionId: targetSectionId,
+        contentItemId,
+        snapshotText: sidebarItem?.textContent ?? undefined,
+        snapshotImageUrl: sidebarItem?.imageUrl ?? undefined,
+        marks: 0,
+        parentQuestionId,
+      },
+    ]);
+  }
+
+  const canvasContent = (
+    <div className="flex flex-col h-full flex-1 min-w-0">
       <div className="sticky top-0 z-10 bg-white border-b px-4 py-2 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1.5">
@@ -414,7 +436,6 @@ export default function PaperCanvas({
         </Button>
       </div>
 
-      {/* Scrollable sections area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {sections.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full py-16 text-center gap-3">
@@ -427,34 +448,47 @@ export default function PaperCanvas({
             </p>
           </div>
         ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragEnd={handleDragEnd}
-          >
-            {sections.map((section) => (
-              <PaperSection
-                key={section.id}
-                section={section}
-                onUpdateSection={handleUpdateSection}
-                onDeleteSection={handleDeleteSection}
-                onUpdateQuestionMarks={handleUpdateQuestionMarks}
-                onDeleteQuestion={handleDeleteQuestion}
-                isDropTarget={activeDropSectionId === section.id}
-              />
-            ))}
-            <DragOverlay>
-              {activeDragId && !activeDragId.startsWith("sidebar-") && (
-                <div className="rounded border bg-white px-3 py-2 text-sm shadow-lg opacity-80">
-                  Moving question…
-                </div>
-              )}
-            </DragOverlay>
-          </DndContext>
+          sections.map((section) => (
+            <PaperSection
+              key={section.id}
+              section={section}
+              numberingFormat={numberingFormat}
+              onUpdateSection={handleUpdateSection}
+              onDeleteSection={handleDeleteSection}
+              onUpdateQuestionMarks={handleUpdateQuestionMarks}
+              onDeleteQuestion={handleDeleteQuestion}
+              isDropTarget={activeDropSectionId === section.id}
+              activeDropParentQuestionId={activeDropParentQuestionId}
+            />
+          ))
         )}
       </div>
     </div>
+  );
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+    >
+      <div className="flex h-full w-full overflow-hidden">
+        {sidebar}
+        {canvasContent}
+      </div>
+      <DragOverlay>
+        {activeDragId?.startsWith("sidebar-") ? (
+          <div className="rounded border bg-white px-3 py-2 text-sm shadow-lg opacity-90 max-w-xs">
+            Adding content…
+          </div>
+        ) : activeDragId ? (
+          <div className="rounded border bg-white px-3 py-2 text-sm shadow-lg opacity-80">
+            Moving question…
+          </div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
   );
 }

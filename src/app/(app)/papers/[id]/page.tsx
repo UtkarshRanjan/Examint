@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import PaperCanvas from "@/components/PaperCanvas";
 import HeaderFooterEditor from "@/components/HeaderFooterEditor";
 import { CONTENT_TYPE_LABELS } from "@/lib/types";
-import type { ContentItemType } from "@/lib/types";
+import type { ContentItemType, NumberingFormat } from "@/lib/types";
 import type { PaperSectionData } from "@/components/PaperSection";
 import { cn, truncate } from "@/lib/utils";
 
@@ -324,106 +324,104 @@ export default function PaperEditorPage({
         </div>
       </div>
 
-      {/* Two-panel layout */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* ── Left: Content Bank Sidebar ── */}
-        <div
-          className={cn(
-            "border-r bg-zinc-50 flex flex-col transition-all duration-200 shrink-0",
-            sidebarCollapsed ? "w-10" : "w-72"
-          )}
-        >
-          {/* Sidebar collapse toggle */}
-          <button
-            onClick={() => setSidebarCollapsed((v) => !v)}
-            className="flex items-center justify-center h-10 border-b hover:bg-zinc-100 transition-colors shrink-0"
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {sidebarCollapsed ? (
-              <ChevronRight className="h-4 w-4 text-zinc-400" />
-            ) : (
-              <div className="flex items-center gap-2 w-full px-3">
-                <ChevronLeft className="h-4 w-4 text-zinc-400" />
-                <span className="text-xs font-medium text-zinc-600">
-                  Content Bank
-                </span>
-              </div>
+      {/* Paper editor: sidebar + canvas share one DnD context */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <PaperCanvas
+        paperId={paperId}
+        numberingFormat={paper.numberingFormat as NumberingFormat}
+        initialSections={paper.sections}
+        onSave={handleSaveOperations}
+        sidebar={
+          <div
+            className={cn(
+              "border-r bg-zinc-50 flex flex-col transition-all duration-200 shrink-0",
+              sidebarCollapsed ? "w-10" : "w-72"
             )}
-          </button>
-
-          {!sidebarCollapsed && (
-            <>
-              {/* Search */}
-              <div className="p-2 border-b">
-                <div className="relative">
-                  <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-zinc-400" />
-                  <Input
-                    placeholder="Search…"
-                    value={rawSearch}
-                    onChange={(e) => setRawSearch(e.target.value)}
-                    className="pl-7 h-8 text-xs"
-                  />
-                </div>
-              </div>
-
-              {/* Items list */}
-              <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-                {sidebarLoading ? (
-                  <div className="flex justify-center py-8">
-                    <Loader2 className="h-5 w-5 animate-spin text-zinc-300" />
-                  </div>
-                ) : sidebarItems.length === 0 ? (
-                  <p className="text-xs text-zinc-400 text-center py-8">
-                    No items found.{" "}
-                    <Link href="/upload" className="underline">
-                      Upload more →
-                    </Link>
-                  </p>
-                ) : (
-                  sidebarItems.map((item) => (
-                    <DraggableSidebarItem key={item.id} item={item} />
-                  ))
-                )}
-              </div>
-
-              {/* Sidebar pagination */}
-              {sidebarTotalPages > 1 && (
-                <div className="border-t p-2 flex items-center justify-between">
-                  <button
-                    onClick={() => setSidebarPage((p) => Math.max(1, p - 1))}
-                    disabled={sidebarPage <= 1}
-                    className="text-xs text-zinc-500 hover:text-zinc-900 disabled:opacity-40"
-                  >
-                    ‹ Prev
-                  </button>
-                  <span className="text-xs text-zinc-400">
-                    {sidebarPage}/{sidebarTotalPages}
+          >
+            {/* Sidebar collapse toggle */}
+            <button
+              onClick={() => setSidebarCollapsed((v) => !v)}
+              className="flex items-center justify-center h-10 border-b hover:bg-zinc-100 transition-colors shrink-0"
+              title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {sidebarCollapsed ? (
+                <ChevronRight className="h-4 w-4 text-zinc-400" />
+              ) : (
+                <div className="flex items-center gap-2 w-full px-3">
+                  <ChevronLeft className="h-4 w-4 text-zinc-400" />
+                  <span className="text-xs font-medium text-zinc-600">
+                    Content Bank
                   </span>
-                  <button
-                    onClick={() =>
-                      setSidebarPage((p) =>
-                        Math.min(sidebarTotalPages, p + 1)
-                      )
-                    }
-                    disabled={sidebarPage >= sidebarTotalPages}
-                    className="text-xs text-zinc-500 hover:text-zinc-900 disabled:opacity-40"
-                  >
-                    Next ›
-                  </button>
                 </div>
               )}
-            </>
-          )}
-        </div>
+            </button>
 
-        {/* ── Right: Paper Canvas ── */}
-        <div className="flex-1 overflow-hidden">
-          <PaperCanvas
-            paperId={paperId}
-            initialSections={paper.sections}
-            onSave={handleSaveOperations}
-          />
-        </div>
+            {!sidebarCollapsed && (
+              <>
+                {/* Search */}
+                <div className="p-2 border-b">
+                  <div className="relative">
+                    <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-zinc-400" />
+                    <Input
+                      placeholder="Search…"
+                      value={rawSearch}
+                      onChange={(e) => setRawSearch(e.target.value)}
+                      className="pl-7 h-8 text-xs"
+                    />
+                  </div>
+                </div>
+
+                {/* Items list */}
+                <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                  {sidebarLoading ? (
+                    <div className="flex justify-center py-8">
+                      <Loader2 className="h-5 w-5 animate-spin text-zinc-300" />
+                    </div>
+                  ) : sidebarItems.length === 0 ? (
+                    <p className="text-xs text-zinc-400 text-center py-8">
+                      No items found.{" "}
+                      <Link href="/upload" className="underline">
+                        Upload more →
+                      </Link>
+                    </p>
+                  ) : (
+                    sidebarItems.map((item) => (
+                      <DraggableSidebarItem key={item.id} item={item} />
+                    ))
+                  )}
+                </div>
+
+                {/* Sidebar pagination */}
+                {sidebarTotalPages > 1 && (
+                  <div className="border-t p-2 flex items-center justify-between">
+                    <button
+                      onClick={() => setSidebarPage((p) => Math.max(1, p - 1))}
+                      disabled={sidebarPage <= 1}
+                      className="text-xs text-zinc-500 hover:text-zinc-900 disabled:opacity-40"
+                    >
+                      ‹ Prev
+                    </button>
+                    <span className="text-xs text-zinc-400">
+                      {sidebarPage}/{sidebarTotalPages}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setSidebarPage((p) =>
+                          Math.min(sidebarTotalPages, p + 1)
+                        )
+                      }
+                      disabled={sidebarPage >= sidebarTotalPages}
+                      className="text-xs text-zinc-500 hover:text-zinc-900 disabled:opacity-40"
+                    >
+                      Next ›
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        }
+        />
       </div>
 
       {/* Header/Footer drawer */}

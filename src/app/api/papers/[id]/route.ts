@@ -116,20 +116,27 @@ export async function PATCH(
     paperUpdateData.footerConfig = JSON.stringify(body.footerConfig);
 
   // Execute all operations in sequence within a transaction.
-  await prisma.$transaction(async (tx) => {
-    // Apply paper-level updates if any.
-    if (Object.keys(paperUpdateData).length > 0) {
-      await tx.questionPaper.update({
-        where: { id: params.id },
-        data: paperUpdateData,
-      });
-    }
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Apply paper-level updates if any.
+      if (Object.keys(paperUpdateData).length > 0) {
+        await tx.questionPaper.update({
+          where: { id: params.id },
+          data: paperUpdateData,
+        });
+      }
 
-    // Process each operation in order.
-    for (const op of body.operations ?? []) {
-      await applyOperation(tx, params.id, op);
-    }
-  });
+      // Process each operation in order.
+      for (const op of body.operations ?? []) {
+        await applyOperation(tx, params.id, op);
+      }
+    });
+  } catch (error) {
+    console.error("PATCH /api/papers/[id] failed:", error);
+    const message =
+      error instanceof Error ? error.message : "Failed to save paper changes.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
 
   // Return the fully updated paper.
   const updatedPaper = await prisma.questionPaper.findUnique({
@@ -203,6 +210,7 @@ type PaperOperation =
       snapshotImageUrl?: string;
       marks?: number;
       order?: number;
+      parentQuestionId?: string | null;
     }
   | {
       type: "UPDATE_QUESTION";
@@ -211,7 +219,12 @@ type PaperOperation =
       snapshotText?: string;
     }
   | { type: "DELETE_QUESTION"; questionId: string }
-  | { type: "REORDER_QUESTIONS"; sectionId: string; questionIds: string[] };
+  | {
+      type: "REORDER_QUESTIONS";
+      sectionId: string;
+      questionIds: string[];
+      parentQuestionId?: string | null;
+    };
 
 /**
  * Applies a single PaperOperation within an active Prisma transaction.
@@ -274,9 +287,41 @@ async function applyOperation(
     }
 
     case "ADD_QUESTION": {
-      // Determine the next order value within the section.
+      if (op.sectionId.startsWith("temp-")) {
+        throw new Error(
+          "This section is still saving. Please wait a moment and try again."
+        );
+      }
+
+      if (op.parentQuestionId) {
+        if (op.parentQuestionId.startsWith("temp-")) {
+          throw new Error(
+            "The parent question is still saving. Please wait a moment before adding subquestions."
+          );
+        }
+
+        const parent = await tx.paperQuestion.findFirst({
+          where: { id: op.parentQuestionId, sectionId: op.sectionId },
+          select: { id: true, parentQuestionId: true },
+        });
+
+        if (!parent) {
+          throw new Error("Parent question not found in this section.");
+        }
+
+        if (parent.parentQuestionId) {
+          throw new Error(
+            "Subquestions can only be added under top-level questions."
+          );
+        }
+      }
+
+      // Determine the next order value among siblings (same section + parent).
       const questionCount = await tx.paperQuestion.count({
-        where: { sectionId: op.sectionId },
+        where: {
+          sectionId: op.sectionId,
+          parentQuestionId: op.parentQuestionId ?? null,
+        },
       });
       await tx.paperQuestion.create({
         data: {
@@ -286,6 +331,7 @@ async function applyOperation(
           snapshotImageUrl: op.snapshotImageUrl ?? null,
           marks: op.marks ?? 0,
           order: op.order ?? questionCount,
+          parentQuestionId: op.parentQuestionId ?? null,
         },
       });
       break;

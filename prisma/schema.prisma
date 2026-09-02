@@ -129,7 +129,10 @@ model PaperSection {
 //   If the source item is deleted, this becomes null but the snapshot is retained.
 // - marks: marks awarded for this question; used to calculate section totals
 //   and the grand total in the paper editor and DOCX output.
-// - order: zero-indexed position within the parent section.
+// - order: zero-indexed position within the parent section (top-level) or
+//   within the parent question's subquestion list.
+// - parentQuestionId: optional link to a parent PaperQuestion for one level
+//   of subquestions (e.g. parts (i), (ii) under a stem question).
 // =============================================================================
 model PaperQuestion {
   id               String   @id @default(cuid())
@@ -139,9 +142,12 @@ model PaperQuestion {
   snapshotImageUrl String?
   marks            Int      @default(0)
   order            Int      @default(0)
+  parentQuestionId String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  section     PaperSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  contentItem ContentItem? @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
+  section        PaperSection   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  contentItem    ContentItem?   @relation(fields: [contentItemId], references: [id], onDelete: SetNull)
+  parentQuestion PaperQuestion? @relation("SubQuestions", fields: [parentQuestionId], references: [id], onDelete: Cascade)
+  subQuestions   PaperQuestion[] @relation("SubQuestions")
 }

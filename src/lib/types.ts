@@ -156,6 +156,17 @@ export function formatQuestionLabel(
 }
 
 /**
+ * Generates a subquestion label using lowercase Roman numerals in parentheses.
+ * Always used for one level of parts under a parent question: (i), (ii), (iii).
+ *
+ * @param index - 1-based subquestion number within the parent.
+ * @returns Formatted label string (e.g. "(i)" or "(iv)").
+ */
+export function formatSubquestionLabel(index: number): string {
+  return `(${toRoman(index)})`;
+}
+
+/**
  * Converts a positive integer to a lowercase Roman numeral string.
  * Used for the "(i)" numbering format.
  *

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import Cropper, { type Area } from "react-easy-crop";
+import { getCroppedImageBlob } from "@/lib/crop-image";
 import { Button } from "@/components/ui/button";
 import { X, RotateCw, ZoomIn, ZoomOut, Crop } from "lucide-react";
 
@@ -59,6 +60,7 @@ export default function ImageCropEditor({
   const [rotation, setRotation] = useState(0);
   // The pixel area of the crop (populated by onCropComplete callback).
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
+  const croppedAreaPixelsRef = useRef<Area | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
   /**
@@ -69,6 +71,7 @@ export default function ImageCropEditor({
    * @param croppedPixels - The exact pixel coordinates of the crop rectangle.
    */
   const onCropComplete = useCallback((_: Area, croppedPixels: Area) => {
+    croppedAreaPixelsRef.current = croppedPixels;
     setCroppedAreaPixels(croppedPixels);
   }, []);
 
@@ -94,91 +97,15 @@ export default function ImageCropEditor({
   }
 
   /**
-   * Uses the browser Canvas API to render the cropped region of the image
-   * into a new Blob (JPEG, quality 0.9).
-   *
-   * Steps:
-   * 1. Load the image into an HTMLImageElement.
-   * 2. Create a canvas sized to the crop area.
-   * 3. Apply rotation transform if needed.
-   * 4. Draw only the cropped region of the source image onto the canvas.
-   * 5. Export the canvas as a JPEG Blob.
-   *
-   * @returns A JPEG Blob of the cropped image region.
+   * Renders the crop frame region (including zoom/pan) into a JPEG Blob.
    */
   async function getCroppedBlob(): Promise<Blob> {
-    if (!croppedAreaPixels) {
+    const pixelCrop = croppedAreaPixelsRef.current ?? croppedAreaPixels;
+    if (!pixelCrop) {
       throw new Error("No crop area selected.");
     }
 
-    return new Promise((resolve, reject) => {
-      const image = new Image();
-      image.src = imageSrc;
-      image.onload = () => {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          reject(new Error("Canvas 2D context not available."));
-          return;
-        }
-
-        // Convert rotation to radians for Math functions.
-        const rotRad = (rotation * Math.PI) / 180;
-
-        // When rotated 90° or 270°, width and height are swapped.
-        const isPortraitRotation = rotation === 90 || rotation === 270;
-        canvas.width = isPortraitRotation
-          ? croppedAreaPixels.height
-          : croppedAreaPixels.width;
-        canvas.height = isPortraitRotation
-          ? croppedAreaPixels.width
-          : croppedAreaPixels.height;
-
-        // Centre the canvas and apply rotation transform.
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.rotate(rotRad);
-        ctx.translate(-image.width / 2, -image.height / 2);
-
-        // Draw the full image (rotation is handled by the canvas transform).
-        ctx.drawImage(image, 0, 0);
-
-        // Reset transform and draw only the cropped region.
-        // We need to re-draw targeting just the crop area coordinates.
-        const croppedCanvas = document.createElement("canvas");
-        croppedCanvas.width = croppedAreaPixels.width;
-        croppedCanvas.height = croppedAreaPixels.height;
-        const croppedCtx = croppedCanvas.getContext("2d");
-        if (!croppedCtx) {
-          reject(new Error("Cropped canvas context not available."));
-          return;
-        }
-
-        croppedCtx.drawImage(
-          canvas,
-          croppedAreaPixels.x,
-          croppedAreaPixels.y,
-          croppedAreaPixels.width,
-          croppedAreaPixels.height,
-          0,
-          0,
-          croppedAreaPixels.width,
-          croppedAreaPixels.height
-        );
-
-        croppedCanvas.toBlob(
-          (blob) => {
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error("Failed to export canvas as Blob."));
-            }
-          },
-          "image/jpeg",
-          0.9 // JPEG quality: 0.9 balances quality vs. upload size
-        );
-      };
-      image.onerror = () => reject(new Error("Failed to load image for cropping."));
-    });
+    return getCroppedImageBlob(imageSrc, pixelCrop, rotation);
   }
 
   /**
@@ -211,7 +138,7 @@ export default function ImageCropEditor({
               Crop Image
             </h2>
             <p className="text-xs text-zinc-500">
-              {imageFile.name} — drag to pan, use controls to zoom and rotate
+              {imageFile.name} — drag to pan, zoom in on the area you want, then confirm
             </p>
           </div>
           <button

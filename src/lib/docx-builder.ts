@@ -22,7 +22,11 @@ import {
 import sharp from "sharp";
 import type { QuestionPaper, PaperSection, PaperQuestion } from "@prisma/client";
 import type { PaperHeaderConfig, PaperFooterConfig, NumberingFormat } from "@/lib/types";
-import { formatQuestionLabel } from "@/lib/types";
+import { formatQuestionLabel, formatSubquestionLabel } from "@/lib/types";
+import {
+  getSubquestions,
+  getTopLevelQuestions,
+} from "@/lib/paper-questions";
 
 /**
  * Examint — DOCX Builder
@@ -362,15 +366,18 @@ async function buildSectionContent(
     );
   }
 
-  // Questions, sorted by their order field.
-  const sortedQuestions = [...section.questions].sort(
-    (a, b) => a.order - b.order
-  );
+  // Top-level questions, sorted by order.
+  const topLevelQuestions = getTopLevelQuestions(section.questions);
 
-  for (let i = 0; i < sortedQuestions.length; i++) {
-    const question = sortedQuestions[i];
+  for (let i = 0; i < topLevelQuestions.length; i++) {
+    const question = topLevelQuestions[i];
     const label = formatQuestionLabel(i + 1, numberingFormat);
-    const questionElements = await buildQuestionContent(question, label);
+    const subquestions = getSubquestions(section.questions, question.id);
+    const questionElements = await buildQuestionContent(
+      question,
+      label,
+      subquestions
+    );
     elements.push(...questionElements);
   }
 
@@ -391,12 +398,16 @@ async function buildSectionContent(
  */
 async function buildQuestionContent(
   question: PaperQuestion,
-  label: string
+  label: string,
+  subquestions: PaperQuestion[] = []
 ): Promise<Paragraph[]> {
   const elements: Paragraph[] = [];
-  const marksText = question.marks > 0 ? `[${question.marks} mark${question.marks !== 1 ? "s" : ""}]` : "";
+  const hasSubs = subquestions.length > 0;
+  const marksText =
+    !hasSubs && question.marks > 0
+      ? `[${question.marks} mark${question.marks !== 1 ? "s" : ""}]`
+      : "";
 
-  // Main text paragraph with label + content + marks.
   elements.push(
     new Paragraph({
       children: [
@@ -406,7 +417,7 @@ async function buildQuestionContent(
           ? [new TextRun({ text: `\t${marksText}`, bold: true })]
           : []),
       ],
-      spacing: { before: 120, after: 120 },
+      spacing: { before: 120, after: hasSubs ? 60 : 120 },
       tabStops: [
         {
           type: "right" as const,
@@ -416,17 +427,80 @@ async function buildQuestionContent(
     })
   );
 
-  // If this question has an associated image (photo or diagram), embed it.
   if (question.snapshotImageUrl) {
     const imageRun = await buildImageRun(question.snapshotImageUrl, MAX_IMAGE_WIDTH_PX);
     if (imageRun) {
       elements.push(
         new Paragraph({
           children: [imageRun],
-          spacing: { before: 80, after: 200 },
+          spacing: { before: 80, after: hasSubs ? 60 : 200 },
         })
       );
     }
+  }
+
+  let subTotal = 0;
+  for (let i = 0; i < subquestions.length; i++) {
+    const sub = subquestions[i];
+    const subLabel = formatSubquestionLabel(i + 1);
+    subTotal += sub.marks;
+    const subMarksText =
+      sub.marks > 0
+        ? `[${sub.marks} mark${sub.marks !== 1 ? "s" : ""}]`
+        : "";
+
+    elements.push(
+      new Paragraph({
+        children: [
+          new TextRun({ text: `     ${subLabel}  `, bold: true }),
+          new TextRun({ text: sub.snapshotText ?? "" }),
+          ...(subMarksText
+            ? [new TextRun({ text: `\t${subMarksText}`, bold: true })]
+            : []),
+        ],
+        spacing: { before: 60, after: 60 },
+        indent: { left: convertInchesToTwip(0.4) },
+        tabStops: [
+          {
+            type: "right" as const,
+            position: A4_PAGE_WIDTH_EMU - convertInchesToTwip(2),
+          },
+        ],
+      })
+    );
+
+    if (sub.snapshotImageUrl) {
+      const imageRun = await buildImageRun(sub.snapshotImageUrl, MAX_IMAGE_WIDTH_PX);
+      if (imageRun) {
+        elements.push(
+          new Paragraph({
+            children: [imageRun],
+            spacing: { before: 60, after: 60 },
+            indent: { left: convertInchesToTwip(0.4) },
+          })
+        );
+      }
+    }
+  }
+
+  if (hasSubs) {
+    elements.push(
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: `\tTotal: ${subTotal} mark${subTotal !== 1 ? "s" : ""}`,
+            bold: true,
+          }),
+        ],
+        spacing: { before: 60, after: 200 },
+        tabStops: [
+          {
+            type: "right" as const,
+            position: A4_PAGE_WIDTH_EMU - convertInchesToTwip(2),
+          },
+        ],
+      })
+    );
   }
 
   return elements;
